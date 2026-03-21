@@ -47,4 +47,3 @@ During routine scanning, the analyzer flagged two distinct Python droppers masqu
 * Add new YARA rules to expand detection capabilities.
 * Refine existing YARA rules to reduce FPs and improve precision..
 * Implement multi-threading to improve performance.
-```
