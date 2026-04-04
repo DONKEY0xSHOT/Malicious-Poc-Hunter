@@ -117,7 +117,23 @@ app.include_router(votes.router,     prefix=API_PREFIX)
 app.include_router(comments.router,  prefix=API_PREFIX)
 app.include_router(auth.router,      prefix=API_PREFIX)
 
-# ---------- Static frontend ----------
-_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
+# ---------- Static frontend (SPA with catch-all) ----------
+_FRONTEND_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
+
 if os.path.isdir(_FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")
+    # Serve /static/* files directly
+    _STATIC_DIR = os.path.join(_FRONTEND_DIR, "static")
+    if os.path.isdir(_STATIC_DIR):
+        app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+    # SPA catch-all: any path not matched by /api/* or /static/* serves index.html
+    from fastapi.responses import FileResponse
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        # If the exact file exists in frontend/, serve it (e.g. favicon.ico)
+        file_path = os.path.join(_FRONTEND_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        # Otherwise, serve index.html and let the SPA router handle it
+        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
