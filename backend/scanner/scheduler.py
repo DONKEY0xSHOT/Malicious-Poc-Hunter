@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .analyzer import Analyzer
@@ -11,42 +13,51 @@ from .analyzer import Analyzer
 logger = logging.getLogger(__name__)
 
 
-def setup_scheduler(analyzer: Analyzer, interval_minutes: int, max_repos: int) -> AsyncIOScheduler:
+def setup_scheduler(
+    analyzer: Analyzer, interval_minutes: int, max_repos: int
+) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
-    # Run the first scan immediately on startup
+    # Fire the very first scan 5 seconds after startup so the app is fully
+    # initialised and can serve health-checks while the scan runs.
     scheduler.add_job(
         _safe_scan,
+        trigger=DateTrigger(run_date=datetime.now(timezone.utc)),
         args=[analyzer, max_repos],
         id="poc_scan_initial",
         name="PoC Hunter initial scan",
-        misfire_grace_time=60,
+        misfire_grace_time=120,
         max_instances=1,
     )
 
-    # Then repeat on the configured interval
+    # Recurring scan on the configured interval
     scheduler.add_job(
         _safe_scan,
         trigger=IntervalTrigger(minutes=interval_minutes),
         args=[analyzer, max_repos],
-        id="poc_scan",
-        name="PoC Hunter scan",
+        id="poc_scan_recurring",
+        name="PoC Hunter recurring scan",
         replace_existing=True,
-        misfire_grace_time=60,
+        misfire_grace_time=120,
         max_instances=1,
     )
-    logger.info("Scheduler configured: immediate first scan, then every %d minutes", interval_minutes)
+
+    logger.info(
+        "Scheduler configured: initial scan on startup, then every %d minutes",
+        interval_minutes,
+    )
     return scheduler
 
 
 async def _safe_scan(analyzer: Analyzer, max_repos: int) -> None:
-    """Wrapper so scheduler never crashes on scan errors."""
+    """Wrapper that catches all exceptions so the scheduler never crashes."""
     try:
         result = await analyzer.run_scan(max_repos=max_repos)
         logger.info(
-            "Scheduled scan complete: %d scanned, %d flagged",
+            "Scheduled scan complete: run #%d, %d scanned, %d flagged",
+            result.run_id,
             result.repos_scanned,
             result.repos_flagged,
         )
-    except Exception as exc:
-        logger.error("Scheduled scan raised an exception: %s", exc, exc_info=True)
+    except Exception:
+        logger.exception("Scheduled scan raised an exception")

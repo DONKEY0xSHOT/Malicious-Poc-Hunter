@@ -4,14 +4,16 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.staticfiles import StaticFiles
 
 from ..config import settings
 from ..db.database import Database
@@ -27,6 +29,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Resolve frontend directory once at module load
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+_INDEX_HTML = _FRONTEND_DIR / "index.html"
+_STATIC_DIR = _FRONTEND_DIR / "static"
 
 
 @asynccontextmanager
@@ -65,7 +72,11 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
-    logger.info("Application started. Scan interval: %d min", settings.scan_interval_minutes)
+
+    logger.info(
+        "Application started. Frontend: %s (exists=%s). Scan interval: %d min",
+        _FRONTEND_DIR, _INDEX_HTML.exists(), settings.scan_interval_minutes,
+    )
 
     yield
 
@@ -88,11 +99,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ---------- Middleware (order matters) ----------
+# ---------- Middleware (order matters: outermost first) ----------
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=[settings.frontend_url, "*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
@@ -108,7 +119,7 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ---------- Routers ----------
+# ---------- API routers ----------
 API_PREFIX = "/api/v1"
 app.include_router(findings.router,  prefix=API_PREFIX)
 app.include_router(scan_runs.router, prefix=API_PREFIX)
@@ -117,23 +128,34 @@ app.include_router(votes.router,     prefix=API_PREFIX)
 app.include_router(comments.router,  prefix=API_PREFIX)
 app.include_router(auth.router,      prefix=API_PREFIX)
 
-# ---------- Static frontend (SPA with catch-all) ----------
-_FRONTEND_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))
 
-if os.path.isdir(_FRONTEND_DIR):
-    # Serve /static/* files directly
-    _STATIC_DIR = os.path.join(_FRONTEND_DIR, "static")
-    if os.path.isdir(_STATIC_DIR):
-        app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+# ---------- Static assets + SPA fallback ----------
+# Mount /static to serve CSS/JS assets directly via StaticFiles
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-    # SPA catch-all: any path not matched by /api/* or /static/* serves index.html
-    from fastapi.responses import FileResponse
 
-    @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
-        # If the exact file exists in frontend/, serve it (e.g. favicon.ico)
-        file_path = os.path.join(_FRONTEND_DIR, full_path)
-        if full_path and os.path.isfile(file_path):
-            return FileResponse(file_path)
-        # Otherwise, serve index.html and let the SPA router handle it
-        return FileResponse(os.path.join(_FRONTEND_DIR, "index.html"))
+@app.api_route("/{full_path:path}", methods=["GET"], include_in_schema=False)
+async def spa_catch_all(request: Request, full_path: str):
+    """Serve index.html for all non-API GET requests (SPA client-side routing).
+
+    This must be the last route registered so API and /static take priority.
+    """
+    # Serve an exact file if it exists at the root of frontend/ (e.g. favicon.ico)
+    if full_path:
+        candidate = _FRONTEND_DIR / full_path
+        if candidate.is_file() and _FRONTEND_DIR in candidate.resolve().parents:
+            return FileResponse(str(candidate))
+
+    # Serve index.html for all SPA routes
+    if _INDEX_HTML.is_file():
+        return FileResponse(
+            str(_INDEX_HTML),
+            media_type="text/html",
+        )
+
+    # Frontend not present (development without frontend files)
+    return JSONResponse(
+        {"detail": "Frontend not found. Ensure the frontend/ directory is present."},
+        status_code=404,
+    )
