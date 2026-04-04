@@ -20,14 +20,25 @@ _PAGE_SIZE = 100
 _SEARCH_QUERY = "CVE-20 in:name"
 
 
+class GitHubTokenAuth(httpx.Auth):
+    """Forces the Authorization header to be kept across cross-domain redirects."""
+    def __init__(self, token: str):
+        self.token = token
+
+    def auth_flow(self, request: httpx.Request):
+        if self.token:
+            request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
+
+
 class GitHubClient:
     def __init__(self, token: str = "", max_retries: int = 5) -> None:
-        headers: dict[str, str] = {"Accept": _ACCEPT_HEADER}
         self._has_token = bool(token)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        auth = GitHubTokenAuth(token) if token else None
+        
         self._client = httpx.AsyncClient(
-            headers=headers,
+            headers={"Accept": _ACCEPT_HEADER},
+            auth=auth,
             timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
             follow_redirects=True,
         )
@@ -116,22 +127,14 @@ class GitHubClient:
     # ------------------------------------------------------------------ #
 
     async def download_repo_zip(self, repo: RepoInfo) -> bytes | None:
-        """Download repository as ZIP archive via the GitHub API. Returns bytes or None."""
-        url = f"{_API_BASE}/repos/{repo.full_name}/zipball/{repo.default_branch}"
+        """Download repository as ZIP archive. Returns bytes or None."""
+        # Use the direct archive URL just like your original CLI script did
+        url = f"https://github.com/{repo.full_name}/archive/refs/heads/{repo.default_branch}.zip"
 
         for attempt in range(self._max_retries):
             try:
-                # 1. Disable automatic redirects to intercept the Location header
-                resp = await self._client.get(url, follow_redirects=False)
-                
-                # 2. If redirected, fetch the target manually to preserve the Authorization header
-                if resp.status_code in (301, 302, 307):
-                    redirect_url = resp.headers.get("Location")
-                    if redirect_url:
-                        # Because this is a fresh get() call, self._client explicitly attaches 
-                        # the default headers (including Authorization) to the new domain.
-                        resp = await self._client.get(redirect_url, follow_redirects=True)
-                        
+                # Strip the API-specific Accept header so the zip server doesn't reject it
+                resp = await self._client.get(url, headers={"Accept": "*/*"})
             except httpx.RequestError as exc:
                 logger.warning(
                     "Download error for %s (attempt %d/%d): %s",
@@ -170,7 +173,6 @@ class GitHubClient:
 
         logger.error("Download exhausted %d retries for %s", self._max_retries, repo.full_name)
         return None
-
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
