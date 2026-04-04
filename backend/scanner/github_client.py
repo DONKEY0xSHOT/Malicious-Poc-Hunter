@@ -14,22 +14,29 @@ from .models import RepoInfo
 logger = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://api.github.com/search/repositories"
+_API_BASE = "https://api.github.com"
 _ACCEPT_HEADER = "application/vnd.github.v3+json"
 _PAGE_SIZE = 100
-_SEARCH_QUERY = "/CVE-20 in:name"
+_SEARCH_QUERY = "CVE-20 in:name"
 
 
 class GitHubClient:
     def __init__(self, token: str = "", max_retries: int = 5) -> None:
         headers: dict[str, str] = {"Accept": _ACCEPT_HEADER}
+        self._has_token = bool(token)
         if token:
             headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.AsyncClient(
             headers=headers,
-            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0),
+            timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
             follow_redirects=True,
         )
         self._max_retries = max_retries
+        if not token:
+            logger.warning(
+                "No GITHUB_TOKEN configured. API rate limit is 60 req/hr "
+                "(vs 5000/hr with a token). Set GITHUB_TOKEN for reliable scanning."
+            )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -109,41 +116,50 @@ class GitHubClient:
     # ------------------------------------------------------------------ #
 
     async def download_repo_zip(self, repo: RepoInfo) -> bytes | None:
-        """Download repository as ZIP archive. Returns bytes or None on failure."""
-        url = f"{repo.html_url}/archive/refs/heads/{repo.default_branch}.zip"
+        """Download repository as ZIP archive via the GitHub API. Returns bytes or None."""
+        # Use the API endpoint which respects auth tokens and has proper rate-limit headers.
+        url = f"{_API_BASE}/repos/{repo.full_name}/zipball/{repo.default_branch}"
 
         for attempt in range(self._max_retries):
             try:
                 resp = await self._client.get(url)
             except httpx.RequestError as exc:
                 logger.warning(
-                    "Download error for %s (attempt %d): %s",
-                    repo.full_name, attempt + 1, exc,
+                    "Download error for %s (attempt %d/%d): %s",
+                    repo.full_name, attempt + 1, self._max_retries, exc,
                 )
                 await asyncio.sleep(2 ** attempt)
                 continue
 
             if resp.status_code == 200:
+                logger.debug("Downloaded %s (%d bytes)", repo.full_name, len(resp.content))
                 return resp.content
 
             if resp.status_code in (403, 429):
                 wait = self._rate_limit_wait(resp)
+                remaining = resp.headers.get("X-RateLimit-Remaining", "?")
                 logger.warning(
-                    "Download rate limit for %s, sleeping %ds", repo.full_name, wait
+                    "Rate limit for %s (remaining=%s), sleeping %ds (attempt %d/%d)",
+                    repo.full_name, remaining, wait, attempt + 1, self._max_retries,
                 )
                 await asyncio.sleep(wait)
                 continue
 
             if resp.status_code == 404:
-                logger.warning("Repo not found (404): %s", repo.full_name)
+                logger.warning(
+                    "Repo/branch not found (404): %s (branch=%s)",
+                    repo.full_name, repo.default_branch,
+                )
                 return None
 
             logger.warning(
-                "Download HTTP %d for %s", resp.status_code, repo.full_name
+                "Download HTTP %d for %s: %s",
+                resp.status_code, repo.full_name, resp.text[:200],
             )
-            return None
+            await asyncio.sleep(2 ** attempt)
+            continue
 
-        logger.error("Download: exhausted retries for %s", repo.full_name)
+        logger.error("Download exhausted %d retries for %s", self._max_retries, repo.full_name)
         return None
 
     # ------------------------------------------------------------------ #
