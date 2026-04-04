@@ -46,6 +46,9 @@ class Analyzer:
             tasks: list[asyncio.Task] = []
             async with asyncio.TaskGroup() as tg:
                 async for repo in self._gh.search_cve_repos(max_repos=max_repos):
+                    if repo.size == 0:
+                        logger.debug("Skipping empty repo %s (0KB)", repo.full_name)
+                        continue
                     if repo.size > self._max_repo_size_kb:
                         logger.debug("Skipping large repo %s (%dKB)", repo.full_name, repo.size)
                         continue
