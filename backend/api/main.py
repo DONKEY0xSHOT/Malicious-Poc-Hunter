@@ -6,14 +6,14 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..config import settings
 from ..db.database import Database
@@ -34,6 +34,82 @@ logger = logging.getLogger(__name__)
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 _INDEX_HTML = _FRONTEND_DIR / "index.html"
 _STATIC_DIR = _FRONTEND_DIR / "static"
+
+
+# ---------------------------------------------------------------------------
+# SPA fallback middleware: intercept 404 responses for non-API GET requests
+# and serve index.html instead.  This is more reliable than a catch-all route
+# because it runs *after* all routing (including StaticFiles mounts) and is
+# unaffected by route registration order.
+# ---------------------------------------------------------------------------
+class SPAFallbackMiddleware:
+    """ASGI middleware that serves index.html for non-API GET 404s."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        path: str = scope.get("path", "")
+        method: str = scope.get("method", "")
+
+        # Only intercept GET requests for non-API, non-static paths
+        if method != "GET" or path.startswith("/api/"):
+            return await self.app(scope, receive, send)
+
+        # Capture the response status code from the inner app
+        response_started = False
+        status_code = 200
+        original_headers: list = []
+        body_parts: list[bytes] = []
+
+        async def capture_send(message: dict) -> None:
+            nonlocal response_started, status_code, original_headers
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                original_headers = message.get("headers", [])
+                response_started = True
+                if status_code != 404:
+                    # Not a 404 -- pass through immediately
+                    await send(message)
+                # If 404, hold the start message so we can replace it
+            elif message["type"] == "http.response.body":
+                if status_code != 404:
+                    await send(message)
+                else:
+                    # Buffer the 404 body (we will discard it)
+                    body_parts.append(message.get("body", b""))
+
+        await self.app(scope, receive, capture_send)
+
+        # If the inner app returned 404, serve index.html instead
+        if status_code == 404 and _INDEX_HTML.is_file():
+            html_bytes = _INDEX_HTML.read_bytes()
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    [b"content-type", b"text/html; charset=utf-8"],
+                    [b"content-length", str(len(html_bytes)).encode()],
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": html_bytes,
+            })
+        elif status_code == 404:
+            # No index.html available -- send the original 404 through
+            await send({
+                "type": "http.response.start",
+                "status": 404,
+                "headers": original_headers,
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"".join(body_parts),
+            })
 
 
 @asynccontextmanager
@@ -100,6 +176,8 @@ app = FastAPI(
 )
 
 # ---------- Middleware (order matters: outermost first) ----------
+# SPA fallback is outermost so it can intercept 404s from any inner handler
+app.add_middleware(SPAFallbackMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -128,34 +206,6 @@ app.include_router(votes.router,     prefix=API_PREFIX)
 app.include_router(comments.router,  prefix=API_PREFIX)
 app.include_router(auth.router,      prefix=API_PREFIX)
 
-
-# ---------- Static assets + SPA fallback ----------
-# Mount /static to serve CSS/JS assets directly via StaticFiles
+# ---------- Static assets ----------
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-
-@app.api_route("/{full_path:path}", methods=["GET"], include_in_schema=False)
-async def spa_catch_all(request: Request, full_path: str):
-    """Serve index.html for all non-API GET requests (SPA client-side routing).
-
-    This must be the last route registered so API and /static take priority.
-    """
-    # Serve an exact file if it exists at the root of frontend/ (e.g. favicon.ico)
-    if full_path:
-        candidate = _FRONTEND_DIR / full_path
-        if candidate.is_file() and _FRONTEND_DIR in candidate.resolve().parents:
-            return FileResponse(str(candidate))
-
-    # Serve index.html for all SPA routes
-    if _INDEX_HTML.is_file():
-        return FileResponse(
-            str(_INDEX_HTML),
-            media_type="text/html",
-        )
-
-    # Frontend not present (development without frontend files)
-    return JSONResponse(
-        {"detail": "Frontend not found. Ensure the frontend/ directory is present."},
-        status_code=404,
-    )
