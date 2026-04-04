@@ -13,6 +13,18 @@ logger = logging.getLogger(__name__)
 
 def setup_scheduler(analyzer: Analyzer, interval_minutes: int, max_repos: int) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
+
+    # Run the first scan immediately on startup
+    scheduler.add_job(
+        _safe_scan,
+        args=[analyzer, max_repos],
+        id="poc_scan_initial",
+        name="PoC Hunter initial scan",
+        misfire_grace_time=60,
+        max_instances=1,
+    )
+
+    # Then repeat on the configured interval
     scheduler.add_job(
         _safe_scan,
         trigger=IntervalTrigger(minutes=interval_minutes),
@@ -23,7 +35,7 @@ def setup_scheduler(analyzer: Analyzer, interval_minutes: int, max_repos: int) -
         misfire_grace_time=60,
         max_instances=1,
     )
-    logger.info("Scheduler configured: every %d minutes", interval_minutes)
+    logger.info("Scheduler configured: immediate first scan, then every %d minutes", interval_minutes)
     return scheduler
 
 
