@@ -39,6 +39,7 @@ class Analyzer:
 
         repos_scanned = 0
         repos_flagged = 0
+        errors = 0
         status = "completed"
 
         try:
@@ -55,21 +56,28 @@ class Analyzer:
                     tasks.append(task)
 
             for task in tasks:
-                result = task.result() if not task.cancelled() and not task.exception() else None
-                if result:
-                    repos_scanned += 1
-                    if result == "suspicious":
-                        repos_flagged += 1
+                result = task.result()
+                repos_scanned += 1
+                if result == "suspicious":
+                    repos_flagged += 1
+                elif result == "error":
+                    errors += 1
 
         except* Exception as eg:
             for exc in eg.exceptions:
                 logger.error("Scan task error: %s", exc, exc_info=True)
             status = "failed"
 
+        if errors == repos_scanned and repos_scanned > 0:
+            logger.error(
+                "All %d repos returned errors. Check GITHUB_TOKEN and network connectivity.",
+                repos_scanned,
+            )
+
         await self._db.update_scan_run(run_id, status, repos_scanned, repos_flagged)
         logger.info(
-            "Scan run #%d %s: %d scanned, %d flagged",
-            run_id, status, repos_scanned, repos_flagged,
+            "Scan run #%d %s: %d scanned, %d flagged, %d errors",
+            run_id, status, repos_scanned, repos_flagged, errors,
         )
         return ScanRunResult(
             run_id=run_id,
@@ -79,21 +87,54 @@ class Analyzer:
         )
 
     async def _analyze_one(self, repo: RepoInfo, run_id: int) -> str:
-        """Download, extract, and scan one repository. Returns scan_status string."""
+        """Download, extract, and scan one repository. Returns scan_status string.
+
+        All exceptions are caught so a single failing repo cannot crash the TaskGroup.
+        """
         async with self._sem:
-            return await self._do_analyze(repo, run_id)
+            try:
+                # Small delay to avoid hammering GitHub with concurrent requests
+                await asyncio.sleep(1)
+                return await self._do_analyze(repo, run_id)
+            except Exception as exc:
+                logger.error("Unhandled error for %s: %s", repo.full_name, exc, exc_info=True)
+                try:
+                    await self._db.insert_finding(run_id, {
+                        "repo_full_name": repo.full_name,
+                        "repo_url": repo.html_url,
+                        "repo_size_kb": repo.size,
+                        "default_branch": repo.default_branch,
+                        "repo_description": repo.description,
+                        "repo_stars": repo.stargazers_count,
+                        "repo_created_at": repo.created_at,
+                        "repo_updated_at": repo.updated_at,
+                        "scan_status": "error",
+                    })
+                except Exception:
+                    logger.exception("Failed to insert error finding for %s", repo.full_name)
+                return "error"
+
+    def _repo_to_finding_data(self, repo: RepoInfo, scan_status: str) -> dict:
+        """Build a dict suitable for Database.insert_finding."""
+        return {
+            "repo_full_name": repo.full_name,
+            "repo_url": repo.html_url,
+            "repo_size_kb": repo.size,
+            "default_branch": repo.default_branch,
+            "repo_description": repo.description,
+            "repo_stars": repo.stargazers_count,
+            "repo_created_at": repo.created_at,
+            "repo_updated_at": repo.updated_at,
+            "scan_status": scan_status,
+        }
 
     async def _do_analyze(self, repo: RepoInfo, run_id: int) -> str:
         logger.info("Analyzing %s", repo.full_name)
         zip_bytes = await self._gh.download_repo_zip(repo)
 
         if zip_bytes is None:
-            await self._db.insert_finding(
-                run_id,
-                {**repo.model_dump(), "repo_full_name": repo.full_name, "repo_url": repo.html_url,
-                 "repo_size_kb": repo.size, "default_branch": repo.default_branch,
-                 "scan_status": "error"},
-            )
+            logger.warning("Download failed for %s, recording as error", repo.full_name)
+            await self._db.insert_finding(run_id, self._repo_to_finding_data(repo, "error"))
             return "error"
 
         # Extract + scan in a thread so we don't block the event loop
@@ -103,12 +144,7 @@ class Analyzer:
             )
         except Exception as exc:
             logger.warning("Extract/scan failed for %s: %s", repo.full_name, exc)
-            await self._db.insert_finding(
-                run_id,
-                {**repo.model_dump(), "repo_full_name": repo.full_name, "repo_url": repo.html_url,
-                 "repo_size_kb": repo.size, "default_branch": repo.default_branch,
-                 "scan_status": "error"},
-            )
+            await self._db.insert_finding(run_id, self._repo_to_finding_data(repo, "error"))
             return "error"
 
         scan_status = "suspicious" if matches else "clean"

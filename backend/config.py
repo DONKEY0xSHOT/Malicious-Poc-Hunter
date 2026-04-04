@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     # GitHub scanner
     github_token: str = ""
     max_repos_per_scan: int = 100
-    max_concurrent_downloads: int = 5
-    max_repo_size_kb: int = 100
+    max_concurrent_downloads: int = 3
+    max_repo_size_kb: int = 500
     rules_dir: str = "./Rules"
 
     # Scheduler
