@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -20,13 +20,14 @@ def setup_scheduler(
 
     # Fire the very first scan 5 seconds after startup so the app is fully
     # initialised and can serve health-checks while the scan runs.
+    first_run = datetime.now(timezone.utc) + timedelta(seconds=5)
     scheduler.add_job(
         _safe_scan,
-        trigger=DateTrigger(run_date=datetime.now(timezone.utc)),
+        trigger=DateTrigger(run_date=first_run),
         args=[analyzer, max_repos],
         id="poc_scan_initial",
         name="PoC Hunter initial scan",
-        misfire_grace_time=120,
+        misfire_grace_time=300,
         max_instances=1,
     )
 
@@ -38,12 +39,13 @@ def setup_scheduler(
         id="poc_scan_recurring",
         name="PoC Hunter recurring scan",
         replace_existing=True,
-        misfire_grace_time=120,
+        misfire_grace_time=300,
         max_instances=1,
     )
 
     logger.info(
-        "Scheduler configured: initial scan on startup, then every %d minutes",
+        "Scheduler configured: initial scan at %s, then every %d minutes",
+        first_run.isoformat(),
         interval_minutes,
     )
     return scheduler
