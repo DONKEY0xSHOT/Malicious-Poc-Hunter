@@ -1,4 +1,5 @@
 import { html, useState, useEffect } from "../app.js";
+import { navigate } from "../app.js";
 import { getMe, loginUrl, logout } from "../api.js";
 
 let _authState = null;
@@ -20,16 +21,23 @@ export function Header({ currentPath }) {
   const handleLogout = async () => {
     await logout();
     notifyAuth(null);
-    window.location.href = "/";
+    navigate("/");
   };
 
-  const navLink = (href, label) =>
-    html`<a href="${href}" class="${currentPath === href || currentPath.startsWith(href + "/") ? "active" : ""}">${label}</a>`;
+  const navLink = (href, label) => {
+    const active = currentPath === href || (href !== "/" && currentPath.startsWith(href + "/"));
+    return html`<a
+      href="${href}"
+      class="${active ? "active" : ""}"
+      onClick=${(e) => { e.preventDefault(); navigate(href); }}
+    >${label}</a>`;
+  };
 
   return html`
     <header class="header">
       <div class="header-inner">
-        <a href="/" class="logo" style="text-decoration:none">
+        <a href="/" class="logo" style="text-decoration:none"
+           onClick=${(e) => { e.preventDefault(); navigate("/"); }}>
           <span class="logo-icon">🔍</span>
           <span>PoC Hunter</span>
         </a>
@@ -47,9 +55,7 @@ export function Header({ currentPath }) {
                 <button class="btn btn-ghost btn-sm" onClick=${handleLogout}>Logout</button>
               `
             : html`
-                <a href="${loginUrl()}" class="btn btn-ghost btn-sm">
-                  Login with GitHub
-                </a>
+                <a href="${loginUrl()}" class="btn btn-ghost btn-sm">Login</a>
               `
           }
         </div>
