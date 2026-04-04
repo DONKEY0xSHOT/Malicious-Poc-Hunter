@@ -190,6 +190,90 @@ class GitHubClient:
         return None
 
     # ------------------------------------------------------------------ #
+    # Diagnostics                                                          #
+    # ------------------------------------------------------------------ #
+
+    async def check_connectivity(self) -> dict[str, Any]:
+        """Run diagnostic checks and return a summary dict."""
+        result: dict[str, Any] = {
+            "has_token": self._has_token,
+            "api_reachable": False,
+            "rate_limit": None,
+            "rate_remaining": None,
+            "rate_reset": None,
+            "search_works": False,
+            "search_error": None,
+            "download_works": False,
+            "download_error": None,
+        }
+
+        # 1. Check API rate limit status
+        try:
+            resp = await self._client.get(f"{_API_BASE}/rate_limit")
+            if resp.status_code == 200:
+                result["api_reachable"] = True
+                data = resp.json()
+                core = data.get("resources", {}).get("core", {})
+                result["rate_limit"] = core.get("limit")
+                result["rate_remaining"] = core.get("remaining")
+                reset_ts = core.get("reset")
+                if reset_ts:
+                    result["rate_reset"] = f"{max(0, int(reset_ts) - int(time.time()))}s from now"
+            elif resp.status_code == 401:
+                result["api_reachable"] = True
+                result["search_error"] = f"Token is INVALID (401): {resp.text[:200]}"
+                return result
+            else:
+                result["search_error"] = f"API returned {resp.status_code}: {resp.text[:200]}"
+        except httpx.RequestError as exc:
+            result["search_error"] = f"Network error: {exc}"
+            return result
+
+        # 2. Quick search test (1 result)
+        try:
+            resp = await self._client.get(
+                _SEARCH_URL,
+                params={"q": _SEARCH_QUERY, "per_page": 1, "page": 1},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result["search_works"] = True
+                result["search_total_count"] = data.get("total_count", 0)
+                items = data.get("items", [])
+                if items:
+                    result["search_sample_repo"] = items[0]["full_name"]
+                    result["search_sample_branch"] = items[0].get("default_branch", "main")
+            else:
+                result["search_error"] = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        except httpx.RequestError as exc:
+            result["search_error"] = f"Network error: {exc}"
+
+        # 3. Try downloading a small known-good repo ZIP
+        test_repo = "octocat/Hello-World"
+        test_branch = "master"
+        test_url = f"https://github.com/{test_repo}/archive/refs/heads/{test_branch}.zip"
+        try:
+            resp = await self._client.get(test_url, headers={"Accept": "*/*"})
+            result["download_test_url"] = test_url
+            result["download_status"] = resp.status_code
+            result["download_content_type"] = resp.headers.get("content-type", "")
+            result["download_size"] = len(resp.content)
+            if resp.status_code == 200:
+                if resp.content.startswith(b"PK"):
+                    result["download_works"] = True
+                else:
+                    result["download_error"] = (
+                        f"Got 200 but content is NOT a ZIP file. "
+                        f"First 200 bytes: {resp.content[:200].decode('utf-8', errors='replace')!r}"
+                    )
+            else:
+                result["download_error"] = f"HTTP {resp.status_code}: {resp.text[:300]}"
+        except httpx.RequestError as exc:
+            result["download_error"] = f"Network error: {exc}"
+
+        return result
+
+    # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
 
