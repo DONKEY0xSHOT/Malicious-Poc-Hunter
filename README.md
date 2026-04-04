@@ -1,6 +1,6 @@
 # Malicious PoC Hunter
 
-A security platform that automatically hunts malicious fake CVE exploitation PoCs on GitHub — those disguised as legitimate vulnerability research but actually targeting security researchers.
+A security platform that automatically hunts malicious fake CVE exploitation PoCs on GitHub, disguised as legitimate vulnerability research but actually targeting security researchers.
 
 The tool runs YARA static analysis on GitHub repositories matching CVE naming patterns, presents results in a polished web dashboard, and supports community voting and commenting on findings.
 
@@ -31,46 +31,6 @@ During routine scanning, the analyzer flagged two distinct Python droppers masqu
 - **Concurrent downloads** via asyncio + httpx (5 repos in parallel)
 - **Rate-limit aware** with exponential backoff and GitHub header parsing
 - **Security hardened**: CSP headers, parameterised queries, HTML sanitisation, per-IP rate limiting
-
----
-
-## Architecture
-
-```
-Browser (Preact SPA)
-      │  HTTP
-      ▼
-Fly.io VM
-  ├── FastAPI (uvicorn, port 8000)
-  │     ├── /api/v1/*  — REST API (findings, votes, comments, auth, stats)
-  │     └── /*         — Static frontend (Preact, no build step)
-  ├── APScheduler — runs scan every 30 minutes in-process
-  ├── SQLite — persistent volume at /data/poc-hunter.db
-  └── YARA engine — compiles rules from ./Rules/ at startup
-```
-
-**No build pipeline.** The frontend uses Preact + HTM loaded from `esm.sh` CDN as ES modules.
-
----
-
-## API Reference
-
-Base URL: `/api/v1` · Interactive docs: `/api/docs`
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/findings` | — | List findings (filters: status, rule_name, repo_name, date_from, date_to, sort, page, per_page) |
-| GET | `/findings/{id}` | — | Full detail with matches, votes, comments |
-| POST | `/findings/{id}/vote` | ✓ | `{"vote": 1}` or `{"vote": -1}`; same vote toggles off |
-| POST | `/findings/{id}/comments` | ✓ | `{"body": "..."}` (max 2000 chars) |
-| DELETE | `/findings/{id}/comments/{cid}` | ✓ | Delete your own comment |
-| GET | `/scan-runs` | — | Paginated scan run history |
-| GET | `/scan-runs/latest` | — | Most recent scan run |
-| GET | `/stats` | — | Aggregate statistics |
-| GET | `/rules` | — | All loaded YARA rules with metadata |
-| GET | `/auth/github` | — | Start GitHub OAuth |
-| GET | `/auth/me` | — | Current user (null if not logged in) |
-| POST | `/auth/logout` | — | Clear session |
 
 ---
 
