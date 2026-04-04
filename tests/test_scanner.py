@@ -116,14 +116,16 @@ async def test_search_returns_repos():
 @pytest.mark.asyncio
 async def test_download_returns_none_on_404():
     from backend.scanner.github_client import GitHubClient
-    import httpx
 
     mock_resp = MagicMock()
     mock_resp.status_code = 404
 
-    with patch.object(GitHubClient, "_client") as mc:
-        mc.get = AsyncMock(return_value=mock_resp)
-        client = GitHubClient()
-        repo = RepoInfo(full_name="x/y", html_url="https://github.com/x/y", default_branch="main", size=10)
-        result = await client.download_repo_zip(repo)
+    client = GitHubClient()
+    mock_http = MagicMock()
+    mock_http.get = AsyncMock(return_value=mock_resp)
+    mock_http.aclose = AsyncMock()
+    client._client = mock_http
+    repo = RepoInfo(full_name="x/y", html_url="https://github.com/x/y", default_branch="main", size=10)
+    result = await client.download_repo_zip(repo)
+    await client.close()
     assert result is None

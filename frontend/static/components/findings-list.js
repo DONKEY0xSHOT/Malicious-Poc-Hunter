@@ -29,6 +29,7 @@ function FilterBar({ filters, onFilter, rules }) {
         <select value=${local.status} onChange=${e => set("status", e.target.value)}>
           <option value="suspicious">Suspicious</option>
           <option value="clean">Clean</option>
+          <option value="error">Error</option>
           <option value="all">All</option>
         </select>
       </div>

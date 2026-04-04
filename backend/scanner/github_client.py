@@ -144,8 +144,23 @@ class GitHubClient:
                 continue
 
             if resp.status_code == 200:
-                logger.debug("Downloaded %s (%d bytes)", repo.full_name, len(resp.content))
-                return resp.content
+                content = resp.content
+                # Validate that the response is actually a ZIP file.
+                # GitHub may return HTML (CAPTCHA, abuse-detection, or
+                # login pages) with a 200 status from shared cloud IPs.
+                if not content.startswith(b"PK"):
+                    content_type = resp.headers.get("content-type", "")
+                    preview = content[:200].decode("utf-8", errors="replace")
+                    logger.warning(
+                        "Download for %s returned non-ZIP content "
+                        "(content-type=%s, %d bytes, preview=%r). "
+                        "GitHub may be serving a CAPTCHA or block page.",
+                        repo.full_name, content_type, len(content), preview,
+                    )
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                logger.debug("Downloaded %s (%d bytes)", repo.full_name, len(content))
+                return content
 
             if resp.status_code in (403, 429):
                 wait = self._rate_limit_wait(resp)

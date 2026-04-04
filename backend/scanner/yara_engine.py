@@ -140,14 +140,13 @@ class YaraEngine:
     def get_rule_info(self) -> list[dict]:
         """Return metadata for all compiled rules."""
         info: list[dict] = []
-        # Scan an empty byte string to enumerate rule names + meta
-        for m in self._rules.match(data=b"__probe__that_never_matches__"):
+        for rule in self._rules:
             info.append(
                 {
-                    "name": m.rule,
-                    "category": m.meta.get("category"),
-                    "severity": m.meta.get("severity"),
-                    "description": m.meta.get("description"),
+                    "name": rule.identifier,
+                    "category": rule.meta.get("category"),
+                    "severity": rule.meta.get("severity"),
+                    "description": rule.meta.get("description"),
                 }
             )
         return info

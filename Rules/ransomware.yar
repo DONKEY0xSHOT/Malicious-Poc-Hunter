@@ -30,6 +30,9 @@ rule Ransomware
         $doc_readme   = "README"       nocase ascii wide
         $doc_abstract = "abstract"     nocase ascii wide
         $doc_markdown = /^#{1,3}\s/         ascii  // markdown headings
+        $doc_analysis = "analysis"     nocase ascii wide
+        $doc_writeup  = "writeup"      nocase ascii wide
+        $doc_research = "security research" nocase ascii wide
 
     condition:
         not (2 of ($doc_*)) and

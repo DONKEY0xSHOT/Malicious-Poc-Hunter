@@ -60,6 +60,13 @@ def test_benign_writeup_no_ransomware_false_positive(engine):
 
 
 def test_get_rule_info_returns_all_rules(engine):
-    """get_rule_info should not crash and return a list."""
+    """get_rule_info should enumerate all compiled rules with metadata."""
     info = engine.get_rule_info()
     assert isinstance(info, list)
+    assert len(info) > 0, "get_rule_info() returned empty list"
+    names = {r["name"] for r in info}
+    assert "Python_Reverse_Shell" in names
+    assert "Ransomware" in names
+    for r in info:
+        assert "name" in r
+        assert r["name"]

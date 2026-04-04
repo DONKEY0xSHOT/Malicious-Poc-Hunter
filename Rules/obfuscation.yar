@@ -18,8 +18,8 @@ rule Obfuscation_Encoded_Execution
         $py_exec3       = "__import__"        nocase ascii wide
         $py_compile     = "compile("          nocase ascii wide
 
-        // Base64 blob: minimum 200 chars (50 groups of 4), NOT preceded by common cert headers
-        $b64_blob = /([A-Za-z0-9+\/]{4}){50,}(==|=)?/ ascii wide
+        // Base64 blob: minimum 100 chars (25 groups of 4), NOT preceded by common cert headers
+        $b64_blob = /([A-Za-z0-9+\/]{4}){25,}(==|=)?/ ascii wide
 
         // Exclusion: PEM/certificate markers → high-confidence benign base64
         $cert_header1 = "-----BEGIN CERTIFICATE-----"    ascii

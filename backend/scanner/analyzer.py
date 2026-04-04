@@ -193,16 +193,19 @@ class Analyzer:
         with tempfile.TemporaryDirectory(prefix="poc-hunter-") as tmp:
             try:
                 with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-                    # Guard against zip-slip
+                    # Guard against zip-slip: only extract safe members
+                    tmp_resolved = str(Path(tmp).resolve())
+                    safe_members = []
                     for member in zf.infolist():
                         member_path = Path(tmp) / member.filename
-                        if not str(member_path.resolve()).startswith(str(Path(tmp).resolve())):
+                        if not str(member_path.resolve()).startswith(tmp_resolved):
                             logger.warning(
                                 "Zip-slip attempt in %s: %s", repo_full_name, member.filename
                             )
                             continue
-                    zf.extractall(tmp)
-            except (zipfile.BadZipFile, Exception) as exc:
+                        safe_members.append(member)
+                    zf.extractall(tmp, members=safe_members)
+            except zipfile.BadZipFile as exc:
                 raise RuntimeError(f"ZIP extraction failed: {exc}") from exc
 
             raw_matches = self._yara.scan_directory(tmp)
