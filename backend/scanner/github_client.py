@@ -117,12 +117,21 @@ class GitHubClient:
 
     async def download_repo_zip(self, repo: RepoInfo) -> bytes | None:
         """Download repository as ZIP archive via the GitHub API. Returns bytes or None."""
-        # Use the API endpoint which respects auth tokens and has proper rate-limit headers.
         url = f"{_API_BASE}/repos/{repo.full_name}/zipball/{repo.default_branch}"
 
         for attempt in range(self._max_retries):
             try:
-                resp = await self._client.get(url)
+                # 1. Disable automatic redirects to intercept the Location header
+                resp = await self._client.get(url, follow_redirects=False)
+                
+                # 2. If redirected, fetch the target manually to preserve the Authorization header
+                if resp.status_code in (301, 302, 307):
+                    redirect_url = resp.headers.get("Location")
+                    if redirect_url:
+                        # Because this is a fresh get() call, self._client explicitly attaches 
+                        # the default headers (including Authorization) to the new domain.
+                        resp = await self._client.get(redirect_url, follow_redirects=True)
+                        
             except httpx.RequestError as exc:
                 logger.warning(
                     "Download error for %s (attempt %d/%d): %s",
@@ -161,6 +170,7 @@ class GitHubClient:
 
         logger.error("Download exhausted %d retries for %s", self._max_retries, repo.full_name)
         return None
+
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
