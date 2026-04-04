@@ -1,49 +1,112 @@
-# Malicious-Poc-Hunter
+# Malicious PoC Hunter
 
-Malicious-Poc-Hunter is a lightweight utility designed to detect malicious code hidden within fake Proof of Concept (PoC) repositories on GitHub. It operates on a simple premise - Find fake CVE exploits that are designed to attack the security community. 
+A security platform that automatically hunts malicious fake CVE exploitation PoCs on GitHub — those disguised as legitimate vulnerability research but actually targeting security researchers.
 
-It does one job and does it well : )
+The tool runs YARA static analysis on GitHub repositories matching CVE naming patterns, presents results in a polished web dashboard, and supports community voting and commenting on findings.
+
+## Real-World Findings
+
+Despite its small size, the tool has successfully identified active campaigns distributing malware disguised as exploits.
+
+During routine scanning, the analyzer flagged two distinct Python droppers masquerading as legitimate vulnerability research. Instead of exploiting target systems, these scripts executed obfuscated payloads on the researcher's local machine. The intercepted repositories were titled:
+
+- **CVE-2025-4606**
+
+<img width="735" height="448" alt="image" src="https://github.com/user-attachments/assets/6a1748fa-da8a-401f-a0bd-311246b448b6" />
+
+- **CVE-2026-0770**
+
+<img width="734" height="485" alt="image" src="https://github.com/user-attachments/assets/0740bafa-30ad-46e6-a901-0bced693022e" />
+
+---
 
 ## Features
 
-* **Discovery:** Queries the GitHub API for repositories matching standard CVE naming conventions.
-* **Downloading:** Downloads and extracts repository archives directly into temporary directories. The files are analyzed and discarded.
-* **Static Analysis:** Compiles and executes YARA rules against the extracted files.
+- **Automated scanning** every 30 minutes with a visible "last updated" timestamp
+- **Web dashboard** with code snippets and visual highlighting of YARA match locations
+- **Archive** of all historical scan results
+- **Search and filters** by rule name, status, date range, repository name, and sort order
+- **Upvote / downvote / comment** system (GitHub OAuth login required)
+- **11 YARA rules** across 6 categories: Obfuscation, Ransomware, Reverse Shell, RAT/Dropper, Exfiltration, Persistence
+- **Concurrent downloads** via asyncio + httpx (5 repos in parallel)
+- **Rate-limit aware** with exponential backoff and GitHub header parsing
+- **Security hardened**: CSP headers, parameterised queries, HTML sanitisation, per-IP rate limiting
 
-## Usage
+---
 
-```bash
-python poc-scanner.py --dir <path_to_rules> [options]
+## Architecture
+
+```
+Browser (Preact SPA)
+      │  HTTP
+      ▼
+Fly.io VM
+  ├── FastAPI (uvicorn, port 8000)
+  │     ├── /api/v1/*  — REST API (findings, votes, comments, auth, stats)
+  │     └── /*         — Static frontend (Preact, no build step)
+  ├── APScheduler — runs scan every 30 minutes in-process
+  ├── SQLite — persistent volume at /data/poc-hunter.db
+  └── YARA engine — compiles rules from ./Rules/ at startup
 ```
 
-### Arguments
+**No build pipeline.** The frontend uses Preact + HTM loaded from `esm.sh` CDN as ES modules.
 
-* `-d`, `--dir`: (Required) Path to the directory containing YARA rules.
-* `-n`, `--number`: The maximum number of valid repositories to process. (Default: 10)
-* `-s`, `--sleep`: Initial sleep duration between requests in seconds to mitigate rate limiting. (Default: 1)
+---
 
-## Included YARA Signatures
+## API Reference
 
-The repository includes two YARA rules targeting common techniques found in deceptive PoCs:
+Base URL: `/api/v1` · Interactive docs: `/api/docs`
 
-**Obfuscation Detection:** Identifies encoded command execution attempts, specifically targeting Base64 payloads larger than 200 characters combined with PowerShell execution flags or Python base64 decoding routines.
-**Ransomware Indicators:** Detects basic ransomware behaviors, such as attempts to delete Volume Shadow Copies via `vssadmin`and the presence of extortion terminology.
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/findings` | — | List findings (filters: status, rule_name, repo_name, date_from, date_to, sort, page, per_page) |
+| GET | `/findings/{id}` | — | Full detail with matches, votes, comments |
+| POST | `/findings/{id}/vote` | ✓ | `{"vote": 1}` or `{"vote": -1}`; same vote toggles off |
+| POST | `/findings/{id}/comments` | ✓ | `{"body": "..."}` (max 2000 chars) |
+| DELETE | `/findings/{id}/comments/{cid}` | ✓ | Delete your own comment |
+| GET | `/scan-runs` | — | Paginated scan run history |
+| GET | `/scan-runs/latest` | — | Most recent scan run |
+| GET | `/stats` | — | Aggregate statistics |
+| GET | `/rules` | — | All loaded YARA rules with metadata |
+| GET | `/auth/github` | — | Start GitHub OAuth |
+| GET | `/auth/me` | — | Current user (null if not logged in) |
+| POST | `/auth/logout` | — | Clear session |
 
-## In the Wild: Real World Findings
+---
 
-Despite its small size, the tool has successfully identified active campaigns distributing malware disguised as exploits. 
+## YARA Rules
 
-During routine scanning, the analyzer flagged two distinct Python droppers masquerading as legitimate vulnerability research. Instead of exploiting target systems, these scripts executed obfuscated payloads on the researcher's local machine. The intercepted repositories were titled:
-* **CVE-2025-4606**
-<img width="735" height="448" alt="image" src="https://github.com/user-attachments/assets/6a1748fa-da8a-401f-a0bd-311246b448b6" />
+| Rule | File | Category | Severity |
+|------|------|----------|----------|
+| `Obfuscation_Encoded_Execution` | `obfuscation.yar` | Obfuscation | Critical |
+| `Ransomware` | `ransomware.yar` | Ransomware | Critical |
+| `PowerShell_Reverse_Shell` | `reverse_shell.yar` | Reverse Shell | Critical |
+| `Python_Reverse_Shell` | `reverse_shell.yar` | Reverse Shell | Critical |
+| `Bash_Reverse_Shell` | `reverse_shell.yar` | Reverse Shell | Critical |
+| `Python_RAT_Indicators` | `rat.yar` | RAT | Critical |
+| `Python_Dropper` | `rat.yar` | Dropper | Critical |
+| `Data_Exfiltration_Python` | `exfiltration.yar` | Exfiltration | High |
+| `Credential_Harvesting` | `exfiltration.yar` | Exfiltration | High |
+| `Windows_Persistence` | `persistence.yar` | Persistence | High |
+| `Linux_Persistence` | `persistence.yar` | Persistence | High |
 
+---
 
-* **CVE-2026-0770**
-<img width="734" height="485" alt="image" src="https://github.com/user-attachments/assets/0740bafa-30ad-46e6-a901-0bced693022e" />
+## Project Structure
 
-
-## TODO
-
-* Add new YARA rules to expand detection capabilities.
-* Refine existing YARA rules to reduce FPs and improve precision.
-* Implement multi-threading to improve performance.
+```
+Malicious-Poc-Hunter/
+├── backend/
+│   ├── api/           FastAPI app, routes, auth, middleware, schemas
+│   ├── db/            SQLite schema + async database layer
+│   └── scanner/       GitHub client, YARA engine, analyzer, scheduler
+├── frontend/
+│   ├── index.html     SPA shell (Preact + HTM, no build step)
+│   └── static/        CSS, JS app, API client, Preact components
+├── Rules/             YARA rule files (6 files, 11 rules)
+├── tests/             pytest suite + malicious/benign fixture files
+├── Dockerfile         Python 3.12 image
+├── fly.toml           Fly.io deployment config
+├── poc-scanner.py     Original CLI scanner (still functional)
+└── .env.example       Environment variable template
+```
