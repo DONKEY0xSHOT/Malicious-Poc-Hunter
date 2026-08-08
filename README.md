@@ -1,14 +1,15 @@
 # Malicious-Poc-Hunter
 
-Malicious-Poc-Hunter is a lightweight utility designed to detect malicious code hidden within fake Proof of Concept (PoC) repositories on GitHub. It operates on a simple premise - Find fake CVE exploits that are designed to attack the security community. 
+Malicious-Poc-Hunter is a lightweight utility designed to detect malicious code hidden within fake Proof of Concept (PoC) repositories on GitHub. It operates on a simple premise - Find fake CVE exploits that are designed to attack the security community.
 
 It does one job and does it well : )
 
 ## Features
 
 * **Discovery:** Queries the GitHub API for repositories matching standard CVE naming conventions.
-* **Downloading:** Downloads and extracts repository archives directly into temporary directories. The files are analyzed and discarded.
-* **Static Analysis:** Compiles and executes YARA rules against the extracted files.
+* **Downloading:** Downloads repository archives and analyzes them entirely in memory. Nothing is written to disk.
+* **Static Analysis:** Compiles and executes YARA rules against the repository's code, skipping documentation and media.
+* **Concurrency:** Downloads and scans repositories in parallel, backing off automatically when the API pushes back.
 
 ## Usage
 
@@ -21,29 +22,28 @@ python poc-scanner.py --dir <path_to_rules> [options]
 * `-d`, `--dir`: (Required) Path to the directory containing YARA rules.
 * `-n`, `--number`: The maximum number of valid repositories to process. (Default: 10)
 * `-s`, `--sleep`: Initial sleep duration between requests in seconds to mitigate rate limiting. (Default: 1)
+* `-t`, `--threads`: Number of repositories downloaded and scanned concurrently. (Default: 8)
 
 ## Included YARA Signatures
 
-The repository includes two YARA rules targeting common techniques found in deceptive PoCs:
+The repository includes three YARA rules targeting common techniques found in deceptive PoCs:
 
-**Obfuscation Detection:** Identifies encoded command execution attempts, specifically targeting Base64 payloads larger than 200 characters combined with PowerShell execution flags or Python base64 decoding routines.
-**Ransomware Indicators:** Detects basic ransomware behaviors, such as attempts to delete Volume Shadow Copies via `vssadmin`and the presence of extortion terminology.
-
-## In the Wild: Real World Findings
-
-Despite its small size, the tool has successfully identified active campaigns distributing malware disguised as exploits. 
-
-During routine scanning, the analyzer flagged two distinct Python droppers masquerading as legitimate vulnerability research. Instead of exploiting target systems, these scripts executed obfuscated payloads on the researcher's local machine. The intercepted repositories were titled:
-* **CVE-2025-4606**
-<img width="735" height="448" alt="image" src="https://github.com/user-attachments/assets/6a1748fa-da8a-401f-a0bd-311246b448b6" />
+* **Obfuscation Detection:** Identifies an encoded payload that the repository itself decodes and runs, such as a Base64 blob larger than 200 characters paired with a decoder and an interpreter call.
+* **Exfiltration Detection:** Identifies data sent to a hardcoded chat webhook or bot API, matching only well formed Discord and Telegram credentials rather than the placeholders a genuine PoC documents.
+* **Supply Chain Detection:** Identifies code that runs while a dependency is installed, such as a `setuptools` install hook or an npm lifecycle script that fetches and executes a payload.
 
 
-* **CVE-2026-0770**
-<img width="734" height="485" alt="image" src="https://github.com/user-attachments/assets/0740bafa-30ad-46e6-a901-0bced693022e" />
+## Real World Findings
 
+Despite its small size, the tool has successfully identified active campaigns distributing malware disguised as exploits!
+
+* **Yetazyyy/CVE-2025-4606** - A `scanner.py` marked "Obfuscated by Ohang", carrying an AES-GCM blob that is decrypted behind a password prompt and then executed. ([`48e96cd`](https://github.com/Yetazyyy/CVE-2025-4606/blob/48e96cdfe5aab7a01ac69ca0c05d73b72bf68720/scanner.py))
+* **Yetazyyy/CVE-2026-0770** - The same dropper, republished under a second CVE. ([`3540636`](https://github.com/Yetazyyy/CVE-2026-0770/blob/3540636de6b2b94b7f1343f0fd1bbba7b583600d/scanner.py))
+* **Yetazyyy/CVE-2025-25347** - A third repository by the same author, built from the same template. ([`533b9aa`](https://github.com/Yetazyyy/CVE-2025-25347/blob/533b9aa46a105d8dc6da7cfce3cb838b56234380/scanner.py))
+* **maybe-O/CVE-2025-67303** - An `__init__.py` that opens a PowerShell reverse shell the moment the package is imported, with a `setuptools` hook opening another on `pip install`. ([`a5b0d90`](https://github.com/maybe-O/CVE-2025-67303/blob/a5b0d90646c157adb9cd973e167656742f26ee81/__init__.py))
+
+Every finding links to the exact file at the commit it was observed at, so the code can still be read even if the repository is edited : )
 
 ## TODO
 
-* Add new YARA rules to expand detection capabilities.
-* Refine existing YARA rules to reduce FPs and improve precision.
-* Implement multi-threading to improve performance.
+* Support an optional GitHub token to raise the search API rate limit.
